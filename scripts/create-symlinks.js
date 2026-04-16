@@ -36,10 +36,15 @@ async function ensureParent(target) {
 }
 
 async function backupIfExists(target) {
-  if (!existsSync(target)) return false;
-  const st = await lstat(target);
+  // Use lstat first to detect dangling symlinks (existsSync returns false for those)
+  let st;
+  try {
+    st = await lstat(target);
+  } catch {
+    return false; // nothing at this path
+  }
   if (st.isSymbolicLink()) {
-    // Existing symlink — remove it
+    // Existing symlink (possibly dangling) — remove it
     await unlink(target);
     return false;
   }
