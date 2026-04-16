@@ -1,0 +1,168 @@
+# claude-sync
+
+An MCP server that replaces the Obsidian MCP plugin with a local, file-based,
+Git-synced knowledge vault — so your Claude Code knowledge base and memory
+work seamlessly across machines (laptop, server, VM) without Obsidian running.
+
+- **Drop-in compatible** with the Obsidian MCP Tools plugin: same tool names
+  (`get_vault_file`, `patch_vault_file`, etc.), same parameter shapes. Existing
+  skills that call `mcp__obsidian__*` work unchanged.
+- **Git-backed**: your vault lives in a private GitHub repo. Writes are
+  debounced 30s and pushed automatically; startup pulls the latest.
+- **Cross-machine memory**: `~/.claude/projects/*/memory/` is symlinked to
+  `vault/memory/{project}/`, so `MEMORY.md` and project CLAUDE.md files sync
+  everywhere.
+- **No Obsidian dependency**: the server talks directly to the filesystem.
+  Obsidian is still usable as a pure preview window if you want.
+
+## Architecture
+
+```
+claude-sync (this repo, open source)     my-vault (private GitHub repo)
+├── src/server.ts                        ├── knowledge/   ← Obsidian vault
+├── src/sync.ts                          ├── memory/      ← Claude memory
+├── src/tools.ts                         ├── config/      ← CLAUDE.md
+└── scripts/init.js                      └── mapping.example.json
+         │                                        │
+         └──── claude-sync-init --vault ──────────┘
+                       ↓
+         ~/.knowledge-vault/  (private vault clone + .claude-sync/ runtime)
+         ├── knowledge/       ← MCP server reads from here
+         ├── memory/          ← symlinked to ~/.claude/projects/*/memory/
+         ├── config/          ← symlinked to ~/.claude/CLAUDE.md
+         ├── mapping.json     ← machine-specific path mapping (gitignored)
+         └── .claude-sync/    ← symlink to installed claude-sync
+```
+
+## Tools
+
+All nine tools are compatible with the Obsidian MCP Tools plugin:
+
+| Tool | Purpose |
+|------|---------|
+| `get_vault_file` | Read a file (optionally as JSON with parsed frontmatter) |
+| `list_vault_files` | Recursively list files in the vault or a subdirectory |
+| `search_vault_smart` | Full-text search backed by flexsearch, with folder filters |
+| `search_vault_simple` | Literal string match with surrounding context |
+| `create_vault_file` | Create or overwrite a file |
+| `append_to_vault_file` | Append content to a file |
+| `patch_vault_file` | Modify content at a heading, block ref, or frontmatter field |
+| `delete_vault_file` | Remove a file |
+| `get_server_info` | Return version and sync status (lastSync, HEAD, dirty flag) |
+
+### `patch_vault_file` targeting
+
+| `targetType` | `target` | Use case |
+|--------------|----------|----------|
+| `frontmatter` | Field name (e.g. `status`) | Modify YAML frontmatter fields. `append`/`prepend` work on array fields. `contentType: application/json` parses the content as JSON before assignment. |
+| `heading` | Heading path (e.g. `"Section::Subsection"`) | Target a Markdown section delimited by `::`. `append`/`prepend` add content inside the section; `replace` replaces the entire body (including sub-sections). |
+| `block` | Block reference ID (e.g. `^abc` or `abc`) | Target the paragraph containing `^id`. |
+
+## Setup
+
+### 1. Create a private vault repo
+
+Create an empty private repo on GitHub (e.g. `my-vault`). Seed it with:
+
+```
+knowledge/                # your Obsidian vault content
+memory/                   # claude memory per project
+config/
+  CLAUDE.md               # global CLAUDE.md
+  projects/
+    <project>/CLAUDE.md   # per-project CLAUDE.md
+mapping.example.json      # see below
+.gitignore
+```
+
+Example `mapping.example.json`:
+
+```json
+{
+  "projects": {
+    "my-project": ["/path/on/this/machine/to/my-project"]
+  }
+}
+```
+
+Example `.gitignore`:
+
+```
+node_modules/
+.claude-sync/
+mapping.json
+.obsidian/workspace*
+```
+
+### 2. Install claude-sync
+
+Clone this repo somewhere and install:
+
+```bash
+git clone https://github.com/MisterRaindrop/claude_sync.git
+cd claude_sync
+npm install
+npm run build
+```
+
+### 3. Run init
+
+```bash
+node scripts/init.js --vault git@github.com:you/my-vault.git
+```
+
+This:
+1. Clones your vault into `~/.knowledge-vault/`
+2. Symlinks this claude-sync repo into `~/.knowledge-vault/.claude-sync/`
+3. Generates `~/.knowledge-vault/mapping.json` (scanning `~/.claude/projects/` for hints)
+4. Creates symlinks from `~/.claude/` into the vault
+5. Registers the MCP server as `obsidian` in `~/.claude.json`
+
+Edit `~/.knowledge-vault/mapping.json` to correct project paths, then restart
+Claude Code.
+
+Verify:
+
+```bash
+claude mcp list
+# obsidian should show: Connected
+```
+
+## Running manually (without init)
+
+```bash
+VAULT_PATH=/path/to/vault/knowledge node dist/server.js
+```
+
+`VAULT_PATH` must point at the `knowledge/` subdirectory of the vault
+(where the Markdown files live). Git operations run in the parent directory
+(the vault repo root), so `memory/` and `config/` are synced too.
+
+## Sync behavior
+
+- **Write**: file changed → `dirty=true`, reset 30s debounce timer.
+- **30s of idle**: `git add -A && git commit && git pull --rebase && git push`.
+- **Rebase conflict**: `git rebase --abort && git pull -X theirs && git push`
+  (last-write-wins; simple and predictable).
+- **Startup**: auto-commit any uncommitted changes, then `git pull --rebase`.
+- **Shutdown** (SIGTERM/SIGINT): flush pending sync before exit.
+
+## Development
+
+```bash
+npm install
+npm run build          # compile TypeScript → dist/
+npm test               # run unit tests (patch.ts: 15 tests)
+npm run dev            # run server with tsx (set VAULT_PATH)
+```
+
+Inspect with the MCP inspector:
+
+```bash
+VAULT_PATH=/tmp/test-vault/knowledge \
+  npx @modelcontextprotocol/inspector node dist/server.js
+```
+
+## License
+
+MIT

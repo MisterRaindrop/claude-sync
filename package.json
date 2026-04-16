@@ -1,0 +1,38 @@
+{
+  "name": "claude-sync",
+  "version": "1.0.0",
+  "description": "MCP server for knowledge vault sync — replaces Obsidian MCP with Git-backed storage",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "claude-sync": "dist/server.js",
+    "claude-sync-init": "scripts/init.js"
+  },
+  "files": [
+    "dist",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x dist/server.js scripts/*.js",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
+    "prepare": "npm run build",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "flexsearch": "^0.7.43",
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
