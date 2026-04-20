@@ -107,7 +107,7 @@ async function main() {
   console.log('\nnext steps:');
   console.log(`  1. review ${join(target, 'mapping.json')} — add/remove paths as needed`);
   console.log('  2. restart Claude Code so the new MCP server is picked up');
-  console.log('  3. run `claude mcp list` — "obsidian" should show Connected');
+  console.log('  3. run `claude mcp list` — "claude-sync" should show Connected');
 }
 
 main().catch(err => {

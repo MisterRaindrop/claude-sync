@@ -75,7 +75,6 @@ export async function searchSmart(
 
   ids = ids.slice(0, limit);
 
-  // Build results matching Obsidian MCP format
   const results: SearchResult[] = [];
   for (const id of ids) {
     const stored = fileStore.get(id);
@@ -111,7 +110,7 @@ export async function searchSmart(
 
     results.push({
       filename: id,
-      score: -(results.length + 1) * 100, // Negative score like Obsidian
+      score: -(results.length + 1) * 100, // negative so lower = closer match
       matches,
     });
   }

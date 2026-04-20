@@ -1,7 +1,7 @@
 {
   "name": "claude-sync",
   "version": "1.0.0",
-  "description": "MCP server for knowledge vault sync — replaces Obsidian MCP with Git-backed storage",
+  "description": "MCP server that gives Claude Code a Git-synced knowledge vault and cross-machine memory",
   "type": "module",
   "main": "dist/server.js",
   "bin": {

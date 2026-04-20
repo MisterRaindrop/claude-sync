@@ -11,7 +11,7 @@ import { buildIndex } from './search.js';
 import { startSync, flushSync } from './git-sync.js';
 
 const server = new Server(
-  { name: 'obsidian', version: '1.0.0' },
+  { name: 'claude-sync', version: '1.0.0' },
   { capabilities: { tools: {} } }
 );
 

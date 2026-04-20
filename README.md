@@ -1,26 +1,26 @@
 # claude-sync
 
-An MCP server that replaces the Obsidian MCP plugin with a local, file-based,
-Git-synced knowledge vault — so your Claude Code knowledge base and memory
-work seamlessly across machines (laptop, server, VM) without Obsidian running.
+An MCP server that gives Claude Code a **Git-synced knowledge vault** and
+**cross-machine memory**, so your notes, project `CLAUDE.md` files, and
+Claude's auto-written memories follow you across laptop, server, and VM.
 
-- **Drop-in compatible** with the Obsidian MCP Tools plugin: same tool names
-  (`get_vault_file`, `patch_vault_file`, etc.), same parameter shapes. Existing
-  skills that call `mcp__obsidian__*` work unchanged.
-- **Git-backed**: your vault lives in a private GitHub repo. Writes are
-  debounced 30s and pushed automatically; startup pulls the latest.
-- **Cross-machine memory**: `~/.claude/projects/*/memory/` is symlinked to
+- **Git-backed vault**: your knowledge, memory, and config live in a private
+  GitHub repo. Writes are debounced 30s and pushed automatically; startup
+  pulls the latest.
+- **Cross-machine memory**: `~/.claude/projects/*/memory/` is symlinked into
   `vault/memory/{project}/`, so `MEMORY.md` and project CLAUDE.md files sync
   everywhere.
-- **No Obsidian dependency**: the server talks directly to the filesystem.
-  Obsidian is still usable as a pure preview window if you want.
+- **Nine tools**: read, list, search, create, append, patch, and delete
+  markdown files in the vault; plus a server-info probe.
+- **Plain filesystem**: no external editor or sidecar required. The server
+  talks directly to files on disk.
 
 ## Architecture
 
 ```
 claude-sync (this repo, open source)     my-vault (private GitHub repo)
-├── src/server.ts                        ├── knowledge/   ← Obsidian vault
-├── src/sync.ts                          ├── memory/      ← Claude memory
+├── src/server.ts                        ├── knowledge/   ← markdown knowledge files
+├── src/git-sync.ts                      ├── memory/      ← Claude memory
 ├── src/tools.ts                         ├── config/      ← CLAUDE.md
 └── scripts/init.js                      └── mapping.example.json
          │                                        │
@@ -36,7 +36,7 @@ claude-sync (this repo, open source)     my-vault (private GitHub repo)
 
 ## Tools
 
-All nine tools are compatible with the Obsidian MCP Tools plugin:
+All nine tools:
 
 | Tool | Purpose |
 |------|---------|
@@ -65,7 +65,7 @@ All nine tools are compatible with the Obsidian MCP Tools plugin:
 Create an empty private repo on GitHub (e.g. `my-vault`). Seed it with:
 
 ```
-knowledge/                # your Obsidian vault content
+knowledge/                # your markdown knowledge files
 memory/                   # claude memory per project
 config/
   CLAUDE.md               # global CLAUDE.md
@@ -91,7 +91,6 @@ Example `.gitignore`:
 node_modules/
 .claude-sync/
 mapping.json
-.obsidian/workspace*
 ```
 
 ### 2. Install claude-sync
@@ -116,7 +115,7 @@ This:
 2. Symlinks this claude-sync repo into `~/.knowledge-vault/.claude-sync/`
 3. Generates `~/.knowledge-vault/mapping.json` (scanning `~/.claude/projects/` for hints)
 4. Creates symlinks from `~/.claude/` into the vault
-5. Registers the MCP server as `obsidian` in `~/.claude.json`
+5. Registers the MCP server as `claude-sync` in `~/.claude.json`
 
 Edit `~/.knowledge-vault/mapping.json` to correct project paths, then restart
 Claude Code.
@@ -125,8 +124,15 @@ Verify:
 
 ```bash
 claude mcp list
-# obsidian should show: Connected
+# claude-sync should show: Connected
 ```
+
+### Upgrading from an earlier build
+
+If you previously registered claude-sync under the old name `obsidian`, your
+`~/.claude.json` still has that entry pointing at `dist/server.js`. Remove it
+manually if you no longer want it — the new script writes to
+`mcpServers["claude-sync"]` and never touches other keys.
 
 ## Running manually (without init)
 

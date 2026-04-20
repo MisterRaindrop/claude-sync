@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Register claude-sync as an MCP server named "obsidian" in ~/.claude.json.
+ * Register claude-sync as an MCP server named "claude-sync" in ~/.claude.json.
  *
- * Writes (or updates) top-level mcpServers.obsidian so existing skills that
- * call mcp__obsidian__* tools work unchanged.
+ * Writes (or updates) top-level mcpServers["claude-sync"]. Other entries in
+ * mcpServers are left untouched.
  *
  * Usage:
  *   node scripts/register-mcp.js <vault-path>
@@ -47,11 +47,11 @@ async function main() {
 
   config.mcpServers = config.mcpServers || {};
 
-  if (config.mcpServers.obsidian) {
-    console.error('note: mcpServers.obsidian already exists, overwriting');
+  if (config.mcpServers['claude-sync']) {
+    console.error('note: mcpServers["claude-sync"] already exists, overwriting');
   }
 
-  config.mcpServers.obsidian = {
+  config.mcpServers['claude-sync'] = {
     type: 'stdio',
     command: 'node',
     args: [serverEntry],
@@ -65,7 +65,7 @@ async function main() {
   await writeFile(tmpPath, JSON.stringify(config, null, 2), 'utf-8');
   await rename(tmpPath, configPath);
 
-  console.log(`[ok] registered mcpServers.obsidian in ${configPath}`);
+  console.log(`[ok] registered mcpServers["claude-sync"] in ${configPath}`);
   console.log(`     command: node ${serverEntry}`);
   console.log(`     env.VAULT_PATH: ${join(absVault, 'knowledge')}`);
 }
