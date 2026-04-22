@@ -21,6 +21,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   writeFileSync,
   lstatSync,
 } from 'node:fs';
@@ -35,6 +36,28 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLAUDE_SYNC_ROOT = resolve(__dirname, '..');
+
+function loadEnvFile(path) {
+  if (!existsSync(path)) return false;
+  const raw = readFileSync(path, 'utf-8');
+  for (const rawLine of raw.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq < 0) continue;
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+    // Strip surrounding matching quotes, if any
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = value;
+  }
+  return true;
+}
 
 function parseArgs(argv) {
   const args = {};
@@ -174,12 +197,25 @@ function seedVaultIfEmpty(vaultDir) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  // Load .env (repo root by default; --env-file overrides). Does not
+  // overwrite already-exported env vars.
+  const envPath = args['env-file']
+    ? resolve(args['env-file'])
+    : join(CLAUDE_SYNC_ROOT, '.env');
+  if (loadEnvFile(envPath)) {
+    console.log(`[env] loaded ${envPath}`);
+  }
+
   const vaultUrl = args.vault || process.env.CLAUDE_SYNC_VAULT;
-  const target = resolve(args.target || join(homedir(), '.knowledge-vault'));
+  const target = resolve(
+    args.target || process.env.CLAUDE_SYNC_TARGET || join(homedir(), '.knowledge-vault'),
+  );
 
   if (!vaultUrl) {
     console.error('usage: node scripts/init.js --vault <git-url> [--target <path>]');
     console.error('   or: CLAUDE_SYNC_VAULT=<git-url> node scripts/init.js');
+    console.error('   or: echo "CLAUDE_SYNC_VAULT=<git-url>" > .env && node scripts/init.js');
     console.error('example: CLAUDE_SYNC_VAULT=git@github.com:you/my-vault.git node scripts/init.js');
     process.exit(1);
   }

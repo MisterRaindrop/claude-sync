@@ -74,14 +74,34 @@ npm install
 npm run build
 ```
 
-### 2. Run init (one command)
+### 2. Configure the vault URL
+
+Pick one of:
+
+**a) `.env` file (persists across shells):**
 
 ```bash
-CLAUDE_SYNC_VAULT=git@github.com:you/my-vault.git node scripts/init.js
+cp .env.example .env
+# then edit .env and set CLAUDE_SYNC_VAULT=git@github.com:you/my-vault.git
 ```
 
-`CLAUDE_SYNC_VAULT` is the git URL of your private vault. The script is
-idempotent — rerunning it is safe.
+**b) Environment variable:**
+
+```bash
+export CLAUDE_SYNC_VAULT=git@github.com:you/my-vault.git
+```
+
+**c) CLI flag:** pass `--vault <url>` directly to `init.js` (see below).
+
+Precedence: CLI flag > exported env var > `.env` file.
+
+### 3. Run init (one command)
+
+```bash
+node scripts/init.js
+```
+
+The script is idempotent — rerunning it is safe.
 
 What happens:
 
@@ -109,10 +129,11 @@ claude mcp list
 # claude-sync should show: Connected
 ```
 
-### Alternative: pass the URL as a flag
+### CLI flag alternatives
 
 ```bash
 node scripts/init.js --vault git@github.com:you/my-vault.git
+node scripts/init.js --env-file /path/to/custom.env
 ```
 
 ### Upgrading from an earlier build
