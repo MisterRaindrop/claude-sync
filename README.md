@@ -1,5 +1,7 @@
 # claude-sync
 
+**English** · [简体中文](README.zh.md)
+
 An MCP server that gives Claude Code a **Git-synced knowledge vault** and
 **cross-machine memory**, so your notes, project `CLAUDE.md` files, and
 Claude's auto-written memories follow you across laptop, server, and VM.
