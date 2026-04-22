@@ -16,18 +16,7 @@ import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
-
-function decodeProjectPath(encoded) {
-  // Claude Code encodes project paths by replacing /, ., and potentially
-  // other chars with -. This is lossy — we can't reliably reverse it.
-  // Strategy: naively decode, then verify the path exists on disk.
-  if (!encoded.startsWith('-')) return null;
-  const naive = encoded.replace(/-/g, '/');
-  if (existsSync(naive)) return naive;
-  // Path doesn't exist — the encoding was ambiguous (e.g. cloudberry-pxf
-  // decoded as cloudberry/pxf). Skip this entry.
-  return null;
-}
+import { decodeProjectPath, inferProjectName } from './utils.js';
 
 async function scanExistingProjects() {
   const projectsDir = join(homedir(), '.claude', 'projects');
@@ -40,16 +29,6 @@ async function scanExistingProjects() {
     if (decoded) paths.push(decoded);
   }
   return paths;
-}
-
-function inferProjectName(absPath) {
-  const segments = absPath.split('/').filter(Boolean);
-  // Known subdirs that should fall through to parent
-  const subdirNames = new Set(['fdw', 'src', 'build', 'dist', 'lib']);
-  for (let i = segments.length - 1; i >= 0; i--) {
-    if (!subdirNames.has(segments[i])) return segments[i];
-  }
-  return segments[segments.length - 1] ?? 'unknown';
 }
 
 async function main() {

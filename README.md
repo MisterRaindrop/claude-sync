@@ -60,42 +60,12 @@ All nine tools:
 
 ## Setup
 
-### 1. Create a private vault repo
+Prerequisites: `git`, `node` ≥ 18, and [`gh`](https://cli.github.com) logged
+in to GitHub (needed so `init.js` can auto-create the vault repo if it does
+not exist yet). If you prefer, create the private repo yourself and skip the
+auto-create step.
 
-Create an empty private repo on GitHub (e.g. `my-vault`). Seed it with:
-
-```
-knowledge/                # your markdown knowledge files
-memory/                   # claude memory per project
-config/
-  CLAUDE.md               # global CLAUDE.md
-  projects/
-    <project>/CLAUDE.md   # per-project CLAUDE.md
-mapping.example.json      # see below
-.gitignore
-```
-
-Example `mapping.example.json`:
-
-```json
-{
-  "projects": {
-    "my-project": ["/path/on/this/machine/to/my-project"]
-  }
-}
-```
-
-Example `.gitignore`:
-
-```
-node_modules/
-.claude-sync/
-mapping.json
-```
-
-### 2. Install claude-sync
-
-Clone this repo somewhere and install:
+### 1. Install claude-sync
 
 ```bash
 git clone https://github.com/MisterRaindrop/claude_sync.git
@@ -104,27 +74,45 @@ npm install
 npm run build
 ```
 
-### 3. Run init
+### 2. Run init (one command)
 
 ```bash
-node scripts/init.js --vault git@github.com:you/my-vault.git
+CLAUDE_SYNC_VAULT=git@github.com:you/my-vault.git node scripts/init.js
 ```
 
-This:
-1. Clones your vault into `~/.knowledge-vault/`
-2. Symlinks this claude-sync repo into `~/.knowledge-vault/.claude-sync/`
-3. Generates `~/.knowledge-vault/mapping.json` (scanning `~/.claude/projects/` for hints)
-4. Creates symlinks from `~/.claude/` into the vault
-5. Registers the MCP server as `claude-sync` in `~/.claude.json`
+`CLAUDE_SYNC_VAULT` is the git URL of your private vault. The script is
+idempotent — rerunning it is safe.
 
-Edit `~/.knowledge-vault/mapping.json` to correct project paths, then restart
-Claude Code.
+What happens:
+
+1. Create the GitHub repo if it does not exist (`gh repo create --private`)
+2. Clone it into `~/.knowledge-vault/`
+3. If the clone is empty, seed the folder structure
+   (`knowledge/`, `memory/`, `config/projects/`, `.gitignore`,
+   `mapping.example.json`) and **migrate any existing
+   `~/.claude/projects/*/memory/` content** into `memory/<project>/`
+   before committing and pushing
+4. Build claude-sync (if `dist/` is missing) and symlink it into
+   `~/.knowledge-vault/.claude-sync/`
+5. Generate `mapping.json` from `~/.claude/projects/` and create symlinks
+   from `~/.claude/` into the vault
+6. Register the MCP server as `claude-sync` in `~/.claude.json`
+   (other `mcpServers` entries are left untouched)
+
+Edit `~/.knowledge-vault/mapping.json` if you want to prune or rename project
+mappings, then restart Claude Code.
 
 Verify:
 
 ```bash
 claude mcp list
 # claude-sync should show: Connected
+```
+
+### Alternative: pass the URL as a flag
+
+```bash
+node scripts/init.js --vault git@github.com:you/my-vault.git
 ```
 
 ### Upgrading from an earlier build
