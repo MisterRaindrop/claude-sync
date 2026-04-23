@@ -16,6 +16,7 @@ import { readFile, writeFile, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
+import { loadConfig } from './config.js';
 
 async function main() {
   const vaultPath = process.argv[2];
@@ -51,13 +52,19 @@ async function main() {
     console.error('note: mcpServers["claude-sync"] already exists, overwriting');
   }
 
+  // Pull the token from the central config (or env var) so the MCP server
+  // can authenticate git push/pull without touching the user's ssh setup.
+  const cfg = loadConfig();
+  const env = {
+    VAULT_PATH: join(absVault, 'knowledge'),
+  };
+  if (cfg.token) env.CLAUDE_SYNC_TOKEN = cfg.token;
+
   config.mcpServers['claude-sync'] = {
     type: 'stdio',
     command: 'node',
     args: [serverEntry],
-    env: {
-      VAULT_PATH: join(absVault, 'knowledge'),
-    },
+    env,
   };
 
   // Atomic write: tempfile + rename
@@ -68,6 +75,9 @@ async function main() {
   console.log(`[ok] registered mcpServers["claude-sync"] in ${configPath}`);
   console.log(`     command: node ${serverEntry}`);
   console.log(`     env.VAULT_PATH: ${join(absVault, 'knowledge')}`);
+  if (cfg.token) {
+    console.log(`     env.CLAUDE_SYNC_TOKEN: (redacted, ${cfg.token.length} chars)`);
+  }
 }
 
 main().catch(err => {

@@ -1,5 +1,14 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import {
+  writeFileSync,
+  chmodSync,
+  mkdtempSync,
+  unlinkSync,
+  rmdirSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { SyncStatus } from './types.js';
 
 const exec = promisify(execFile);
@@ -17,8 +26,50 @@ const syncStatus: SyncStatus = {
   syncing: false,
 };
 
+// Build the env for `git` child processes once. If CLAUDE_SYNC_TOKEN is set,
+// we plant a GIT_ASKPASS script so HTTPS remotes pick up the token without
+// it ever being persisted to .git/config. If the token is not set, git falls
+// back to whatever the system already has (ssh-agent, credential helpers).
+let askpassScript: string | null = null;
+let askpassDir: string | null = null;
+
+function buildGitEnv(): NodeJS.ProcessEnv {
+  const token = process.env.CLAUDE_SYNC_TOKEN;
+  if (!token) return process.env;
+
+  if (!askpassScript) {
+    askpassDir = mkdtempSync(join(tmpdir(), 'claude-sync-askpass-'));
+    askpassScript = join(askpassDir, 'askpass.sh');
+    writeFileSync(askpassScript, '#!/bin/sh\nprintf "%s" "$CLAUDE_SYNC_TOKEN"\n', 'utf-8');
+    chmodSync(askpassScript, 0o700);
+  }
+
+  return {
+    ...process.env,
+    GIT_ASKPASS: askpassScript,
+    GIT_TERMINAL_PROMPT: '0',
+  };
+}
+
+function cleanupAskpass(): void {
+  if (askpassScript) {
+    try { unlinkSync(askpassScript); } catch { /* best-effort */ }
+    askpassScript = null;
+  }
+  if (askpassDir) {
+    try { rmdirSync(askpassDir); } catch { /* best-effort */ }
+    askpassDir = null;
+  }
+}
+
+process.on('exit', cleanupAskpass);
+
 async function git(...args: string[]): Promise<string> {
-  const { stdout } = await exec('git', args, { cwd: VAULT_PATH, timeout: 30_000 });
+  const { stdout } = await exec('git', args, {
+    cwd: VAULT_PATH,
+    timeout: 30_000,
+    env: buildGitEnv(),
+  });
   return stdout;
 }
 

@@ -59,9 +59,11 @@ claude-sync（本仓库，开源）                my-vault（你的私有 GitHu
 
 ## 安装与配置
 
-**前置依赖**：`git`、`node` ≥ 18，以及[`gh`](https://cli.github.com) 并且已
-登录 GitHub（`init.js` 在 vault 仓库不存在时需要用它自动创建）。如果你想
-自己手动建私有仓库，可以跳过这步。
+**前置依赖**：`git`、`node` ≥ 18，以及一个带 `repo` scope 的 [GitHub
+Personal Access Token](https://github.com/settings/tokens/new?scopes=repo&description=claude-sync)。
+有了 token，`init.js` 就能走 HTTPS 建仓库并 push，不需要配 ssh key，也不需要装
+`gh` CLI。（如果你已经配好了 ssh + `gh`，老路径仍然可用，见下方
+[用已有 ssh + gh](#用已有-ssh--gh)。）
 
 ### 1. 安装 claude-sync
 
@@ -72,52 +74,36 @@ npm install
 npm run build
 ```
 
-### 2. 配置 vault URL
-
-三选一：
-
-**a) `.env` 文件（跨 shell 持久）：**
-
-```bash
-cp .env.example .env
-# 然后编辑 .env，把 CLAUDE_SYNC_VAULT 设成 git@github.com:你/my-vault.git
-```
-
-**b) 环境变量：**
-
-```bash
-export CLAUDE_SYNC_VAULT=git@github.com:你/my-vault.git
-```
-
-**c) 命令行参数**：直接给 `init.js` 传 `--vault <url>`（见下）。
-
-优先级：CLI flag > 导出的环境变量 > `.env` 文件。
-
-### 3. 跑 init（一条命令）
+### 2. 跑 init
 
 ```bash
 node scripts/init.js
 ```
 
-脚本是幂等的——重跑不会出问题。
+首次运行时 `init.js` 会交互式询问：
 
-它做了什么：
+- vault URL（推荐 HTTPS 格式，例如 `https://github.com/你/my-vault.git`）
+- GitHub token
+- 本地 vault 路径（默认 `~/.knowledge-vault`）
 
-1. 如果 GitHub 上没有这个仓库，用 `gh repo create --private` 建一个
-2. 克隆到 `~/.knowledge-vault/`
+这些会保存到 `~/.claude-sync/config.json`（权限 `600`）。以后在当前机器重跑
+或在其他机器复制/重建这个文件，就不会再问。
+
+脚本是幂等的，重跑安全。
+
+它做的事情：
+
+1. 校验 vault 仓库存在（或通过 GitHub API 建一个私有仓库）
+2. 克隆到本地目标目录
 3. 如果克隆下来是空的，初始化目录骨架（`knowledge/`、`memory/`、
    `config/projects/`、`.gitignore`、`mapping.example.json`），**并把你现有
    的 `~/.claude/projects/*/memory/` 内容迁移进 `memory/<project>/`**，
    然后 commit + push
-4. 如果 `dist/` 不存在，先构建 claude-sync，然后把它符号链接到
-   `~/.knowledge-vault/.claude-sync/`
-5. 扫描 `~/.claude/projects/` 生成 `mapping.json`，并建立从 `~/.claude/`
-   到 vault 的符号链接
+4. 如果 `dist/` 不存在，先构建 claude-sync，然后符号链接到
+   `<vault>/.claude-sync/`
+5. 生成 `mapping.json`，并建立从 `~/.claude/` 到 vault 的符号链接
 6. 在 `~/.claude.json` 的 `mcpServers["claude-sync"]` 下注册 MCP 服务器
    （`mcpServers` 里其他条目不动）
-
-需要的话编辑 `~/.knowledge-vault/mapping.json` 增减或改名项目映射，然后重启
-Claude Code。
 
 验证：
 
@@ -126,10 +112,37 @@ claude mcp list
 # claude-sync 应该显示 Connected
 ```
 
+### 多机器使用
+
+把同一份 `~/.claude-sync/config.json` 放到每台机器上（或在每台机器上
+各回答一次交互提示）——**不需要管 ssh key，也不需要 `gh auth login`**。
+token 存在 `~/.claude-sync/config.json` 里，权限 `600`；运行时通过
+`GIT_ASKPASS` 注入给 git，**绝不会写入 `.git/config`**。
+
+```json
+{
+  "vault": "https://github.com/你/my-vault.git",
+  "token": "ghp_xxxxxxxxxxxxxxxxxxxxxxxx",
+  "target": "/home/你/.knowledge-vault"
+}
+```
+
+```bash
+chmod 600 ~/.claude-sync/config.json
+```
+
+环境变量（`CLAUDE_SYNC_VAULT`、`CLAUDE_SYNC_TOKEN`、`CLAUDE_SYNC_TARGET`）
+和项目内 `.env` 仍然可用，用作覆盖。优先级：env > 中央配置 > `.env`。
+
+### 用已有 ssh + gh
+
+如果你的 vault URL 是 `git@github.com:...`，`init.js` 会跳过 token 流程，
+走老的 ssh + `gh` 路径（和之前版本行为一致）。老用户无需改动。
+
 ### 用命令行参数替代
 
 ```bash
-node scripts/init.js --vault git@github.com:你/my-vault.git
+node scripts/init.js --vault https://github.com/你/my-vault.git
 node scripts/init.js --env-file /path/to/custom.env
 ```
 

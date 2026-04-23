@@ -62,10 +62,12 @@ All nine tools:
 
 ## Setup
 
-Prerequisites: `git`, `node` ≥ 18, and [`gh`](https://cli.github.com) logged
-in to GitHub (needed so `init.js` can auto-create the vault repo if it does
-not exist yet). If you prefer, create the private repo yourself and skip the
-auto-create step.
+Prerequisites: `git` and `node` ≥ 18. A [GitHub Personal Access
+Token](https://github.com/settings/tokens/new?scopes=repo&description=claude-sync)
+with `repo` scope is recommended — with it, `init.js` can create the private
+vault repo and push over HTTPS without any ssh-key or `gh` CLI setup. (If you
+already have ssh + `gh` configured, that path still works — see
+[Using an existing ssh + gh setup](#using-an-existing-ssh--gh-setup) below.)
 
 ### 1. Install claude-sync
 
@@ -76,53 +78,38 @@ npm install
 npm run build
 ```
 
-### 2. Configure the vault URL
-
-Pick one of:
-
-**a) `.env` file (persists across shells):**
-
-```bash
-cp .env.example .env
-# then edit .env and set CLAUDE_SYNC_VAULT=git@github.com:you/my-vault.git
-```
-
-**b) Environment variable:**
-
-```bash
-export CLAUDE_SYNC_VAULT=git@github.com:you/my-vault.git
-```
-
-**c) CLI flag:** pass `--vault <url>` directly to `init.js` (see below).
-
-Precedence: CLI flag > exported env var > `.env` file.
-
-### 3. Run init (one command)
+### 2. Run init
 
 ```bash
 node scripts/init.js
 ```
 
-The script is idempotent — rerunning it is safe.
+On the first run, `init.js` will prompt for:
+
+- your vault URL (HTTPS form, e.g. `https://github.com/you/my-vault.git`)
+- your GitHub token
+- the local vault path (default `~/.knowledge-vault`)
+
+These are saved to `~/.claude-sync/config.json` (mode `600`). On subsequent
+runs — and on any other machine where you copy or re-create that file —
+the prompts are skipped.
+
+The script is idempotent; rerunning it is safe.
 
 What happens:
 
-1. Create the GitHub repo if it does not exist (`gh repo create --private`)
-2. Clone it into `~/.knowledge-vault/`
+1. Verify the repo exists (or create it as private via the GitHub API)
+2. Clone into the local target
 3. If the clone is empty, seed the folder structure
    (`knowledge/`, `memory/`, `config/projects/`, `.gitignore`,
    `mapping.example.json`) and **migrate any existing
    `~/.claude/projects/*/memory/` content** into `memory/<project>/`
    before committing and pushing
 4. Build claude-sync (if `dist/` is missing) and symlink it into
-   `~/.knowledge-vault/.claude-sync/`
-5. Generate `mapping.json` from `~/.claude/projects/` and create symlinks
-   from `~/.claude/` into the vault
+   `<vault>/.claude-sync/`
+5. Generate `mapping.json` and create symlinks from `~/.claude/` into the vault
 6. Register the MCP server as `claude-sync` in `~/.claude.json`
    (other `mcpServers` entries are left untouched)
-
-Edit `~/.knowledge-vault/mapping.json` if you want to prune or rename project
-mappings, then restart Claude Code.
 
 Verify:
 
@@ -131,10 +118,39 @@ claude mcp list
 # claude-sync should show: Connected
 ```
 
+### Using on multiple machines
+
+Put the same `~/.claude-sync/config.json` on each machine (or re-answer the
+prompt once per machine) — no ssh key management or `gh auth login` needed.
+Token lives in `~/.claude-sync/config.json` with mode `600`; it is injected
+into git via `GIT_ASKPASS` at runtime and is **never written to `.git/config`**.
+
+```json
+{
+  "vault": "https://github.com/you/my-vault.git",
+  "token": "ghp_xxxxxxxxxxxxxxxxxxxxxxxx",
+  "target": "/home/you/.knowledge-vault"
+}
+```
+
+```bash
+chmod 600 ~/.claude-sync/config.json
+```
+
+Env vars (`CLAUDE_SYNC_VAULT`, `CLAUDE_SYNC_TOKEN`, `CLAUDE_SYNC_TARGET`) and
+a project-local `.env` still work as overrides. Resolution order: env >
+central config > `.env`.
+
+### Using an existing ssh + gh setup
+
+If your vault URL is `git@github.com:...`, `init.js` skips the token flow
+entirely and falls back to ssh + `gh` (same behavior as earlier builds). No
+changes needed for existing users.
+
 ### CLI flag alternatives
 
 ```bash
-node scripts/init.js --vault git@github.com:you/my-vault.git
+node scripts/init.js --vault https://github.com/you/my-vault.git
 node scripts/init.js --env-file /path/to/custom.env
 ```
 

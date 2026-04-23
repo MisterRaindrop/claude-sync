@@ -30,13 +30,17 @@ export function inferProjectName(absPath) {
 }
 
 /**
- * Parse a git remote URL (ssh or https) into { owner, name, full }.
+ * Parse a git remote URL (ssh or https) into { owner, name, full, protocol }.
  * Returns null if the URL is not a recognized GitHub-style form.
  */
 export function parseGitUrl(url) {
   const ssh = url.match(/^git@[^:]+:([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (ssh) {
+    return { owner: ssh[1], name: ssh[2], full: `${ssh[1]}/${ssh[2]}`, protocol: 'ssh' };
+  }
   const https = url.match(/^https?:\/\/[^/]+\/([^/]+)\/([^/]+?)(?:\.git)?$/);
-  const m = ssh || https;
-  if (!m) return null;
-  return { owner: m[1], name: m[2], full: `${m[1]}/${m[2]}` };
+  if (https) {
+    return { owner: https[1], name: https[2], full: `${https[1]}/${https[2]}`, protocol: 'https' };
+  }
+  return null;
 }

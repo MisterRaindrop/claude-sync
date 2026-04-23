@@ -7,13 +7,14 @@
  * per-project memory content into it, installs claude-sync inside the vault,
  * generates mapping.json, creates symlinks, and registers the MCP server.
  *
- * Usage:
- *   CLAUDE_SYNC_VAULT=git@github.com:you/my-vault.git node scripts/init.js
- *   # or
- *   node scripts/init.js --vault git@github.com:you/my-vault.git [--target <path>]
+ * Configuration (in priority order):
+ *   1. env vars: CLAUDE_SYNC_VAULT / CLAUDE_SYNC_TOKEN / CLAUDE_SYNC_TARGET
+ *   2. ~/.claude-sync/config.json   (recommended, works across projects)
+ *   3. <this repo>/.env              (legacy, kept for backwards compat)
  *
- * Defaults:
- *   --target: ~/.knowledge-vault
+ * For HTTPS vault URLs we use a GitHub personal access token (no ssh key, no
+ * gh CLI). For SSH URLs (git@github.com:...) we fall back to the legacy path
+ * that relies on ssh + gh.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -21,7 +22,6 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
   writeFileSync,
   lstatSync,
 } from 'node:fs';
@@ -33,31 +33,16 @@ import {
   inferProjectName,
   parseGitUrl,
 } from './utils.js';
+import {
+  loadConfig,
+  promptForMissingConfig,
+  CENTRAL_CONFIG_PATH,
+} from './config.js';
+import { runGit } from './git-auth.js';
+import { repoExists, createRepo } from './github-api.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLAUDE_SYNC_ROOT = resolve(__dirname, '..');
-
-function loadEnvFile(path) {
-  if (!existsSync(path)) return false;
-  const raw = readFileSync(path, 'utf-8');
-  for (const rawLine of raw.split('\n')) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const eq = line.indexOf('=');
-    if (eq < 0) continue;
-    const key = line.slice(0, eq).trim();
-    let value = line.slice(eq + 1).trim();
-    // Strip surrounding matching quotes, if any
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (!(key in process.env)) process.env[key] = value;
-  }
-  return true;
-}
 
 function parseArgs(argv) {
   const args = {};
@@ -89,27 +74,42 @@ function trySpawn(cmd, cmdArgs, opts = {}) {
   return spawnSync(cmd, cmdArgs, { stdio: 'ignore', ...opts });
 }
 
-function ensureRepoExists(vaultUrl) {
+async function ensureRepoExists(vaultUrl, token) {
   const parsed = parseGitUrl(vaultUrl);
   if (!parsed) {
     console.log('  [warn] could not parse repo URL; skipping GitHub existence check');
     return;
   }
 
-  // Probe the repo via gh api. If gh isn't installed, we can still try to
-  // clone below — a helpful error will surface there.
+  if (parsed.protocol === 'https') {
+    if (!token) {
+      throw new Error(
+        'HTTPS vault URL requires CLAUDE_SYNC_TOKEN (or `token` in ~/.claude-sync/config.json).\n' +
+        'Generate one at: https://github.com/settings/tokens/new?scopes=repo',
+      );
+    }
+    const exists = await repoExists(parsed.owner, parsed.name, token);
+    if (exists) {
+      console.log(`  [ok] repo ${parsed.full} exists on GitHub`);
+      return;
+    }
+    console.log(`  [info] repo ${parsed.full} not found, creating as private...`);
+    await createRepo(parsed.owner, parsed.name, token);
+    console.log(`  [ok] created ${parsed.full}`);
+    return;
+  }
+
+  // SSH path: legacy gh CLI flow.
   const ghAvailable = trySpawn('gh', ['--version']).status === 0;
   if (!ghAvailable) {
     console.log('  [info] gh CLI not found; assuming repo already exists');
     return;
   }
-
   const probe = trySpawn('gh', ['api', `repos/${parsed.full}`]);
   if (probe.status === 0) {
     console.log(`  [ok] repo ${parsed.full} exists on GitHub`);
     return;
   }
-
   console.log(`  [info] repo ${parsed.full} not found, creating as private...`);
   run('gh', ['repo', 'create', parsed.full, '--private']);
 }
@@ -133,7 +133,6 @@ function migrateExistingMemory(vaultDir) {
     const memDir = join(projectsDir, entry.name, 'memory');
     if (!existsSync(memDir)) continue;
 
-    // Skip if already a symlink (already pointing into some vault)
     let st;
     try { st = lstatSync(memDir); } catch { continue; }
     if (st.isSymbolicLink()) continue;
@@ -145,7 +144,6 @@ function migrateExistingMemory(vaultDir) {
     const target = join(vaultDir, 'memory', projectName);
     mkdirSync(target, { recursive: true });
 
-    // Recursive copy via cp -R; trailing /. copies contents, not the folder itself
     run('cp', ['-R', `${memDir}/.`, target]);
     console.log(`  [migrate] ${projectName}: ${files.length} entries from ${memDir}`);
     migrated++;
@@ -153,7 +151,7 @@ function migrateExistingMemory(vaultDir) {
   return migrated;
 }
 
-function seedVaultIfEmpty(vaultDir) {
+function seedVaultIfEmpty(vaultDir, token) {
   if (!isVaultEmpty(vaultDir)) {
     console.log('  [skip] vault is not empty; skipping seed');
     return false;
@@ -164,7 +162,6 @@ function seedVaultIfEmpty(vaultDir) {
   mkdirSync(join(vaultDir, 'memory'), { recursive: true });
   mkdirSync(join(vaultDir, 'config', 'projects'), { recursive: true });
 
-  // placeholders so empty dirs survive git
   writeFileSync(join(vaultDir, 'knowledge', '.gitkeep'), '');
   writeFileSync(join(vaultDir, 'config', 'projects', '.gitkeep'), '');
 
@@ -182,62 +179,59 @@ function seedVaultIfEmpty(vaultDir) {
     console.log('  [info] no existing memory to migrate');
   }
 
-  // Commit + push the seed. Force branch main in case the empty repo is
-  // on a different default.
-  run('git', ['add', '-A'], { cwd: vaultDir });
-  run('git', ['commit', '-m', 'seed: initial vault structure'], { cwd: vaultDir });
+  runGit(['add', '-A'], { cwd: vaultDir });
+  runGit(['commit', '-m', 'seed: initial vault structure'], { cwd: vaultDir });
   try {
-    run('git', ['branch', '-M', 'main'], { cwd: vaultDir });
+    runGit(['branch', '-M', 'main'], { cwd: vaultDir });
   } catch {
     // branch may already be named main
   }
-  run('git', ['push', '-u', 'origin', 'main'], { cwd: vaultDir });
+  runGit(['push', '-u', 'origin', 'main'], { cwd: vaultDir, token });
   return true;
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  // Load .env (repo root by default; --env-file overrides). Does not
-  // overwrite already-exported env vars.
-  const envPath = args['env-file']
+  // Resolve config: env > ~/.claude-sync/config.json > project .env.
+  const envFile = args['env-file']
     ? resolve(args['env-file'])
     : join(CLAUDE_SYNC_ROOT, '.env');
-  if (loadEnvFile(envPath)) {
-    console.log(`[env] loaded ${envPath}`);
-  }
+  let cfg = loadConfig({ envFile });
 
-  const vaultUrl = args.vault || process.env.CLAUDE_SYNC_VAULT;
-  const target = resolve(
-    args.target || process.env.CLAUDE_SYNC_TARGET || join(homedir(), '.knowledge-vault'),
-  );
+  // --vault flag still wins over everything.
+  if (args.vault) cfg.vault = args.vault;
+  if (args.target) cfg.target = args.target;
 
-  if (!vaultUrl) {
-    console.error('usage: node scripts/init.js --vault <git-url> [--target <path>]');
-    console.error('   or: CLAUDE_SYNC_VAULT=<git-url> node scripts/init.js');
-    console.error('   or: echo "CLAUDE_SYNC_VAULT=<git-url>" > .env && node scripts/init.js');
-    console.error('example: CLAUDE_SYNC_VAULT=git@github.com:you/my-vault.git node scripts/init.js');
-    process.exit(1);
-  }
+  // If vault/target/token are missing, prompt the user and persist to central
+  // config so the next machine (or rerun) is painless.
+  cfg = await promptForMissingConfig(cfg);
 
+  const vaultUrl = cfg.vault;
+  const token = cfg.token;
+  const target = resolve(cfg.target || join(homedir(), '.knowledge-vault'));
+
+  console.log('');
   console.log(`claude-sync init`);
   console.log(`  vault url: ${vaultUrl}`);
   console.log(`  target:    ${target}`);
+  console.log(`  auth:      ${token ? 'token (HTTPS)' : 'ssh/system credential'}`);
+  console.log(`  config:    ${CENTRAL_CONFIG_PATH}`);
   console.log('');
 
   console.log('[1/6] ensuring repo exists on GitHub...');
-  ensureRepoExists(vaultUrl);
+  await ensureRepoExists(vaultUrl, token);
 
   console.log('\n[2/6] cloning vault...');
   if (existsSync(target)) {
     console.log(`  [skip] ${target} already exists`);
   } else {
     mkdirSync(dirname(target), { recursive: true });
-    run('git', ['clone', vaultUrl, target]);
+    runGit(['clone', vaultUrl, target], { token });
   }
 
   console.log('\n[3/6] seeding vault (if empty)...');
-  seedVaultIfEmpty(target);
+  seedVaultIfEmpty(target, token);
 
   console.log('\n[4/6] preparing claude-sync runtime...');
   const distDir = join(CLAUDE_SYNC_ROOT, 'dist');
