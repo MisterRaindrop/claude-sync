@@ -70,8 +70,8 @@ auto-create step.
 ### 1. Install claude-sync
 
 ```bash
-git clone https://github.com/MisterRaindrop/claude_sync.git
-cd claude_sync
+git clone https://github.com/MisterRaindrop/claude-sync.git
+cd claude-sync
 npm install
 npm run build
 ```

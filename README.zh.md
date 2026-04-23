@@ -66,8 +66,8 @@ claude-sync（本仓库，开源）                my-vault（你的私有 GitHu
 ### 1. 安装 claude-sync
 
 ```bash
-git clone https://github.com/MisterRaindrop/claude_sync.git
-cd claude_sync
+git clone https://github.com/MisterRaindrop/claude-sync.git
+cd claude-sync
 npm install
 npm run build
 ```
