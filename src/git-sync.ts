@@ -1,6 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import {
+  existsSync,
   writeFileSync,
   chmodSync,
   mkdtempSync,
@@ -15,9 +16,13 @@ const exec = promisify(execFile);
 
 const VAULT_PATH = process.env.VAULT_PATH!;
 const DEBOUNCE_MS = 30_000;
+// Commits left unpushed (a push that failed, or a process that was killed while pulling/pushing on shutdown) are
+// pushed by the next sync, by the next server start, and by this periodic check in long-running sessions.
+const PENDING_PUSH_MS = Number(process.env.CLAUDE_SYNC_PENDING_PUSH_MS) || 5 * 60_000;
 
 let syncEnabled = false;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingTimer: ReturnType<typeof setInterval> | null = null;
 
 const syncStatus: SyncStatus = {
   lastSync: null,
@@ -90,6 +95,9 @@ export async function startSync(): Promise<void> {
 
   syncEnabled = true;
 
+  // A process killed in the middle of `pull --rebase` leaves the rebase half done; nothing can commit until it is gone.
+  await abortStuckRebase();
+
   // Detect and commit uncommitted changes
   try {
     const status = await git('status', '--porcelain');
@@ -110,11 +118,20 @@ export async function startSync(): Promise<void> {
     process.stderr.write('claude-sync: pull --rebase failed, trying pull -X theirs\n');
     try { await git('rebase', '--abort'); } catch { /* no rebase in progress */ }
     try {
-      await git('pull', '-X', 'theirs');
+      await git('pull', '--no-rebase', '-X', 'theirs');
     } catch (err) {
       process.stderr.write(`claude-sync: pull -X theirs also failed: ${err}\n`);
     }
   }
+
+  // Push what an earlier process committed but could not push (just pulled above)
+  await pushPending(false);
+
+  pendingTimer = setInterval(() => {
+    if (syncStatus.syncing || debounceTimer) return;
+    pushPending().catch(err => process.stderr.write(`claude-sync: pending push error: ${err}\n`));
+  }, PENDING_PUSH_MS);
+  pendingTimer.unref();
 
   // Record current HEAD
   try {
@@ -137,9 +154,62 @@ export function scheduleSync(): void {
   }, DEBOUNCE_MS);
 }
 
+async function abortStuckRebase(): Promise<void> {
+  try {
+    const gitDir = (await git('rev-parse', '--absolute-git-dir')).trim();
+    if (existsSync(join(gitDir, 'rebase-merge')) || existsSync(join(gitDir, 'rebase-apply'))) {
+      process.stderr.write('claude-sync: aborting a rebase left half done by an interrupted sync\n');
+      await git('rebase', '--abort');
+    }
+  } catch (err) {
+    process.stderr.write(`claude-sync: rebase check warning: ${err}\n`);
+  }
+}
+
+async function aheadOfUpstream(): Promise<number> {
+  try {
+    return parseInt((await git('rev-list', '--count', '@{u}..HEAD')).trim(), 10) || 0;
+  } catch {
+    return 0;          // no upstream configured
+  }
+}
+
+async function pullRebase(): Promise<void> {
+  try {
+    await git('pull', '--rebase');
+  } catch {
+    process.stderr.write('claude-sync: rebase conflict, resolving with -X theirs\n');
+    try { await git('rebase', '--abort'); } catch { /* ignore */ }
+    await git('pull', '--no-rebase', '-X', 'theirs');
+  }
+}
+
 /**
- * Flush pending writes immediately (for graceful shutdown).
- * Cancels debounce timer and runs doSync() synchronously if dirty.
+ * Push local commits that are not on the upstream yet. doSync() returns early when the work tree is clean, so
+ * without this a commit whose push failed (or was cut off by shutdown) would stay local until the next write.
+ */
+export async function pushPending(pull = true): Promise<void> {
+  if (!syncEnabled || syncStatus.syncing) return;
+  syncStatus.syncing = true;
+  try {
+    const n = await aheadOfUpstream();
+    if (!n) return;
+    process.stderr.write(`claude-sync: pushing ${n} pending commit(s)\n`);
+    if (pull) await pullRebase();
+    await git('push');
+    syncStatus.head = (await git('rev-parse', 'HEAD')).trim();
+    syncStatus.lastSync = new Date().toISOString();
+  } catch (err) {
+    process.stderr.write(`claude-sync: pending push failed (will retry): ${err}\n`);
+  } finally {
+    syncStatus.syncing = false;
+  }
+}
+
+/**
+ * Graceful shutdown: commit pending writes, but do not pull or push. The client stops waiting for an MCP server
+ * a few seconds after asking it to exit (`claude -p` ends right after its last tool call), and a network pull/push
+ * cut off half way lost the push or left a rebase half done. The next server start or the periodic check pushes it.
  */
 export async function flushSync(): Promise<void> {
   if (!syncEnabled) return;
@@ -147,8 +217,20 @@ export async function flushSync(): Promise<void> {
     clearTimeout(debounceTimer);
     debounceTimer = null;
   }
-  if (syncStatus.dirty && !syncStatus.syncing) {
-    await doSync();
+  if (pendingTimer) {
+    clearInterval(pendingTimer);
+    pendingTimer = null;
+  }
+  if (syncStatus.syncing) return;
+  try {
+    await git('add', '-A');
+    if ((await git('status', '--porcelain')).trim()) {
+      await git('commit', '-m', `claude-sync: auto-commit ${new Date().toISOString()}`);
+      process.stderr.write('claude-sync: committed on shutdown; the next start pushes it\n');
+    }
+    syncStatus.dirty = false;
+  } catch (err) {
+    process.stderr.write(`claude-sync: shutdown commit failed: ${err}\n`);
   }
 }
 
@@ -162,20 +244,15 @@ async function doSync(): Promise<void> {
     const status = await git('status', '--porcelain');
     if (!status.trim()) {
       syncStatus.dirty = false;
+      syncStatus.syncing = false;
+      await pushPending();          // nothing new, but an earlier push may have failed
       return;
     }
 
     const timestamp = new Date().toISOString();
     await git('commit', '-m', `claude-sync: auto-commit ${timestamp}`);
 
-    // Pull with rebase
-    try {
-      await git('pull', '--rebase');
-    } catch {
-      process.stderr.write('claude-sync: rebase conflict, resolving with -X theirs\n');
-      try { await git('rebase', '--abort'); } catch { /* ignore */ }
-      await git('pull', '-X', 'theirs');
-    }
+    await pullRebase();
 
     // Push
     try {
