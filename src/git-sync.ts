@@ -87,7 +87,13 @@ async function isGitRepo(): Promise<boolean> {
   }
 }
 
-export async function startSync(): Promise<void> {
+/**
+ * Local part (abort a stuck rebase, commit leftovers) is awaited; the network part (pull, push pending commits) runs
+ * in the background after the MCP server is connected. The client gives a server 30 s to come up, and a pull plus a
+ * push to GitHub took 15 s on a good day (2026-11-19 a `claude -p` sync failed with "connection timed out").
+ * onPulled runs when the pull brought new commits (the search index is rebuilt).
+ */
+export async function startSync(onPulled?: () => Promise<void>): Promise<void> {
   if (!(await isGitRepo())) {
     process.stderr.write('claude-sync: VAULT_PATH is not a git repository, sync disabled\n');
     return;
@@ -110,22 +116,11 @@ export async function startSync(): Promise<void> {
     process.stderr.write(`claude-sync: startup commit warning: ${err}\n`);
   }
 
-  // Pull latest
   try {
-    await git('pull', '--rebase');
-    process.stderr.write('claude-sync: pulled latest changes\n');
+    syncStatus.head = (await git('rev-parse', 'HEAD')).trim();
   } catch {
-    process.stderr.write('claude-sync: pull --rebase failed, trying pull -X theirs\n');
-    try { await git('rebase', '--abort'); } catch { /* no rebase in progress */ }
-    try {
-      await git('pull', '--no-rebase', '-X', 'theirs');
-    } catch (err) {
-      process.stderr.write(`claude-sync: pull -X theirs also failed: ${err}\n`);
-    }
+    // might be empty repo
   }
-
-  // Push what an earlier process committed but could not push (just pulled above)
-  await pushPending(false);
 
   pendingTimer = setInterval(() => {
     if (syncStatus.syncing || debounceTimer) return;
@@ -133,13 +128,37 @@ export async function startSync(): Promise<void> {
   }, PENDING_PUSH_MS);
   pendingTimer.unref();
 
-  // Record current HEAD
+  void startupNetworkSync(onPulled);
+}
+
+async function startupNetworkSync(onPulled?: () => Promise<void>): Promise<void> {
+  syncStatus.syncing = true;
+  const before = syncStatus.head;
   try {
+    try {
+      await git('pull', '--rebase');
+      process.stderr.write('claude-sync: pulled latest changes\n');
+    } catch {
+      process.stderr.write('claude-sync: pull --rebase failed, trying pull -X theirs\n');
+      try { await git('rebase', '--abort'); } catch { /* no rebase in progress */ }
+      try {
+        await git('pull', '--no-rebase', '-X', 'theirs');
+      } catch (err) {
+        process.stderr.write(`claude-sync: pull -X theirs also failed: ${err}\n`);
+      }
+    }
     syncStatus.head = (await git('rev-parse', 'HEAD')).trim();
     syncStatus.lastSync = new Date().toISOString();
-  } catch {
-    // might be empty repo
+  } catch (err) {
+    process.stderr.write(`claude-sync: startup sync failed: ${err}\n`);
+  } finally {
+    syncStatus.syncing = false;
   }
+  if (onPulled && syncStatus.head !== before) {
+    try { await onPulled(); } catch (err) { process.stderr.write(`claude-sync: reindex after pull failed: ${err}\n`); }
+  }
+  // Push what an earlier process committed but could not push (just pulled above)
+  await pushPending(false);
 }
 
 export function scheduleSync(): void {
@@ -235,7 +254,10 @@ export async function flushSync(): Promise<void> {
 }
 
 async function doSync(): Promise<void> {
-  if (syncStatus.syncing) return;
+  if (syncStatus.syncing) {
+    scheduleSync();               // the startup pull or a pending push is running: try again after the debounce
+    return;
+  }
   syncStatus.syncing = true;
 
   try {
