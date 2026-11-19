@@ -26,7 +26,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 async function main(): Promise<void> {
   process.stderr.write('claude-sync: starting...\n');
 
-  await startSync();
+  await startSync(buildIndex);   // pull / push run in the background; buildIndex again if the pull brought commits
   process.stderr.write('claude-sync: git sync initialized\n');
 
   await buildIndex();
